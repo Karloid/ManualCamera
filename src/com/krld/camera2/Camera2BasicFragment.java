@@ -344,9 +344,10 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
     @Override
     public void onActivityCreated(Bundle savedInstanceState) {
         super.onActivityCreated(savedInstanceState);
-       // mFile = new File(Environment.getExternalStorageDirectory().getAbsolutePath() +"/DCIM/cameraTest/pic.jpg");
-        mFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES) + "/pic.jpg");;
-       // mFile = new File(getActivity().getExternalFilesDir(null), "pic.jpg");
+        // mFile = new File(Environment.getExternalStorageDirectory().getAbsolutePath() +"/DCIM/cameraTest/pic.jpg");
+        mFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES) + "/" + new Date() + ".jpg");
+        ;
+        // mFile = new File(getActivity().getExternalFilesDir(null), "pic.jpg");
     }
 
     @Override
@@ -520,43 +521,44 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
             mPreviewRequestBuilder.addTarget(surface);
 
             // Here, we create a CameraCaptureSession for camera preview.
+            CameraCaptureSession.StateCallback stateCallback = new CameraCaptureSession.StateCallback() {
+
+                @Override
+                public void onConfigured(CameraCaptureSession cameraCaptureSession) {
+                    // The camera is already closed
+                    if (null == mCameraDevice) {
+                        return;
+                    }
+
+                    // When the session is ready, we start displaying the preview.
+                    mCaptureSession = cameraCaptureSession;
+                    try {
+                        // Auto focus should be continuous for camera preview.
+                        mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE,
+                                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                        // Flash is automatically enabled when necessary.
+                        mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
+                                CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
+
+                        // Finally, we start displaying the camera preview.
+                        mPreviewRequest = mPreviewRequestBuilder.build();
+                        mCaptureSession.setRepeatingRequest(mPreviewRequest,
+                                mCaptureCallback, mBackgroundHandler);
+                    } catch (CameraAccessException e) {
+                        e.printStackTrace();
+                    }
+                }
+
+                @Override
+                public void onConfigureFailed(CameraCaptureSession cameraCaptureSession) {
+                    Activity activity = getActivity();
+                    if (null != activity) {
+                        Toast.makeText(activity, "Failed", Toast.LENGTH_SHORT).show();
+                    }
+                }
+            };
             mCameraDevice.createCaptureSession(Arrays.asList(surface, mImageReader.getSurface()),
-                    new CameraCaptureSession.StateCallback() {
-
-                        @Override
-                        public void onConfigured(CameraCaptureSession cameraCaptureSession) {
-                            // The camera is already closed
-                            if (null == mCameraDevice) {
-                                return;
-                            }
-
-                            // When the session is ready, we start displaying the preview.
-                            mCaptureSession = cameraCaptureSession;
-                            try {
-                                // Auto focus should be continuous for camera preview.
-                                mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE,
-                                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-                                // Flash is automatically enabled when necessary.
-                                mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
-                                        CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
-
-                                // Finally, we start displaying the camera preview.
-                                mPreviewRequest = mPreviewRequestBuilder.build();
-                                mCaptureSession.setRepeatingRequest(mPreviewRequest,
-                                        mCaptureCallback, mBackgroundHandler);
-                            } catch (CameraAccessException e) {
-                                e.printStackTrace();
-                            }
-                        }
-
-                        @Override
-                        public void onConfigureFailed(CameraCaptureSession cameraCaptureSession) {
-                            Activity activity = getActivity();
-                            if (null != activity) {
-                                Toast.makeText(activity, "Failed", Toast.LENGTH_SHORT).show();
-                            }
-                        }
-                    }, null
+                    stateCallback, null
             );
         } catch (CameraAccessException e) {
             e.printStackTrace();
@@ -650,12 +652,14 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
             final CaptureRequest.Builder captureBuilder =
                     mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             captureBuilder.addTarget(mImageReader.getSurface());
+            captureBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_OFF);
 
             // Use the same AE and AF modes as the preview.
             captureBuilder.set(CaptureRequest.CONTROL_AF_MODE,
                     CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-            captureBuilder.set(CaptureRequest.CONTROL_AE_MODE,
-                    CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
+            captureBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, 5000L * 1000000L);
+            captureBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, 3000);
+            captureBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
 
             // Orientation
             int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();

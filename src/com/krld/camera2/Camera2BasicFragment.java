@@ -24,6 +24,7 @@ import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
+import android.hardware.Camera;
 import android.hardware.camera2.*;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
@@ -33,10 +34,11 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Log;
+import android.util.Range;
 import android.util.Size;
 import android.util.SparseIntArray;
 import android.view.*;
-import android.widget.Toast;
+import android.widget.*;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -46,6 +48,8 @@ import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+
+import static android.content.Context.CAMERA_SERVICE;
 
 public class Camera2BasicFragment extends Fragment implements View.OnClickListener {
 
@@ -291,6 +295,9 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
 
     };
 
+    private NumberPicker mIsoPicker;
+    private String[] mIsoValues;
+
     /**
      * Given {@code choices} of {@code Size}s supported by a camera, chooses the smallest one whose
      * width and height are at least as large as the respective requested values, and whose aspect
@@ -339,15 +346,28 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
     public void onViewCreated(final View view, Bundle savedInstanceState) {
         view.findViewById(R.id.picture).setOnClickListener(this);
         mTextureView = (AutoFitTextureView) view.findViewById(R.id.texture);
+
+        mIsoPicker = (NumberPicker) view.findViewById(R.id.iso_spinner);
+
+        settingUpNumberPicker();
+    }
+
+    private void settingUpNumberPicker() {
+        mIsoPicker.setMinValue(0);
+        mIsoPicker.setMaxValue(mIsoValues.length - 1);
+        mIsoPicker.setDisplayedValues(mIsoValues);
+        mIsoPicker.setOnValueChangedListener(new NumberPicker.OnValueChangeListener() {
+            @Override
+            public void onValueChange(NumberPicker picker, int oldVal, int newVal) {
+                createCameraPreviewSession();
+            }
+        });
     }
 
     @Override
     public void onActivityCreated(Bundle savedInstanceState) {
         super.onActivityCreated(savedInstanceState);
-        // mFile = new File(Environment.getExternalStorageDirectory().getAbsolutePath() +"/DCIM/cameraTest/pic.jpg");
         mFile = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES) + "/" + new Date() + ".jpg");
-        ;
-        // mFile = new File(getActivity().getExternalFilesDir(null), "pic.jpg");
     }
 
     @Override
@@ -381,7 +401,7 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
      */
     private void setUpCameraOutputs(int width, int height) {
         Activity activity = getActivity();
-        CameraManager manager = (CameraManager) activity.getSystemService(Context.CAMERA_SERVICE);
+        CameraManager manager = (CameraManager) activity.getSystemService(CAMERA_SERVICE);
         try {
             for (String cameraId : manager.getCameraIdList()) {
                 CameraCharacteristics characteristics
@@ -392,15 +412,16 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
                         == CameraCharacteristics.LENS_FACING_FRONT) {
                     continue;
                 }
+                setupIsoValues(characteristics);
 
                 StreamConfigurationMap map = characteristics.get(
                         CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
 
-                // For still image captures, we use the largest available size.
-                Size largest = Collections.max(
+                // For still image captures, we use the minimum available size.
+                Size minimum = Collections.min(
                         Arrays.asList(map.getOutputSizes(ImageFormat.JPEG)),
                         new CompareSizesByArea());
-                mImageReader = ImageReader.newInstance(largest.getWidth(), largest.getHeight(),
+                mImageReader = ImageReader.newInstance(minimum.getWidth(), minimum.getHeight(),
                         ImageFormat.JPEG, /*maxImages*/2);
                 mImageReader.setOnImageAvailableListener(
                         mOnImageAvailableListener, mBackgroundHandler);
@@ -409,7 +430,7 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
                 // bus' bandwidth limitation, resulting in gorgeous previews but the storage of
                 // garbage capture data.
                 mPreviewSize = chooseOptimalSize(map.getOutputSizes(SurfaceTexture.class),
-                        width, height, largest);
+                        width, height, minimum);
 
                 // We fit the aspect ratio of TextureView to the size of preview we picked.
                 int orientation = getResources().getConfiguration().orientation;
@@ -433,6 +454,21 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
         }
     }
 
+    private void setupIsoValues(CameraCharacteristics characteristics) {
+        Range<Integer> integerRange = characteristics.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE);
+        int iso = integerRange.getLower();
+        List<String> tmpArray = new ArrayList<String>();
+        for (int i = 0; i < 100; i++) {
+            String number = Integer.toString(iso);
+            tmpArray.add(number);
+            iso *= 2;
+            if (iso > integerRange.getUpper()) {
+                break;
+            }
+        }
+        mIsoValues = (String[]) tmpArray.toArray();
+    }
+
     /**
      * Opens the camera specified by {@link Camera2BasicFragment#mCameraId}.
      */
@@ -440,7 +476,7 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
         setUpCameraOutputs(width, height);
         configureTransform(width, height);
         Activity activity = getActivity();
-        CameraManager manager = (CameraManager) activity.getSystemService(Context.CAMERA_SERVICE);
+        CameraManager manager = (CameraManager) activity.getSystemService(CAMERA_SERVICE);
         try {
             if (!mCameraOpenCloseLock.tryAcquire(2500, TimeUnit.MILLISECONDS)) {
                 throw new RuntimeException("Time out waiting to lock camera opening.");
@@ -506,6 +542,11 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
      */
     private void createCameraPreviewSession() {
         try {
+            if (null != mCaptureSession) {
+                mCaptureSession.close();
+                mCaptureSession = null;
+            }
+
             SurfaceTexture texture = mTextureView.getSurfaceTexture();
             assert texture != null;
 
@@ -517,7 +558,7 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
 
             // We set up a CaptureRequest.Builder with the output Surface.
             mPreviewRequestBuilder
-                    = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+                    = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_MANUAL);
             mPreviewRequestBuilder.addTarget(surface);
 
             // Here, we create a CameraCaptureSession for camera preview.
@@ -539,12 +580,12 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
                         // Flash is automatically enabled when necessary.
                         mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
                                 CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
-
+                        mPreviewRequestBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, 200);
                         // Finally, we start displaying the camera preview.
                         mPreviewRequest = mPreviewRequestBuilder.build();
                         mCaptureSession.setRepeatingRequest(mPreviewRequest,
                                 mCaptureCallback, mBackgroundHandler);
-                    } catch (CameraAccessException e) {
+                    } catch (Exception e) {
                         e.printStackTrace();
                     }
                 }
@@ -650,13 +691,9 @@ public class Camera2BasicFragment extends Fragment implements View.OnClickListen
             }
             // This is the CaptureRequest.Builder that we use to take a picture.
             final CaptureRequest.Builder captureBuilder =
-                    mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+                    mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_MANUAL);
             captureBuilder.addTarget(mImageReader.getSurface());
-            captureBuilder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_OFF);
 
-            // Use the same AE and AF modes as the preview.
-            captureBuilder.set(CaptureRequest.CONTROL_AF_MODE,
-                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
             captureBuilder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, 5000L * 1000000L);
             captureBuilder.set(CaptureRequest.SENSOR_SENSITIVITY, 3000);
             captureBuilder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
